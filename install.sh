@@ -22,3 +22,11 @@ pip --proxy $http_proxy install git+https://github.com/JSALT2022CodeSwitchingASR
 # Install icefall
 pip install git+https://github.com/k2-fsa/icefall.git
 
+# Some more dependencies
+pip install \
+    more-itertools \
+    pyarabic \
+    lxml
+
+conda install -c conda-forge libsndfile
+
