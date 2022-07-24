@@ -28,3 +28,9 @@ pip install \
 
 conda install -c conda-forge libsndfile
 
+# MatGraph
+git clone https://github.com/FAST-ASR/matgraph.git
+cd matgraph
+pip install -r requirements.txt
+python setup.py install
+cd -

@@ -23,7 +23,6 @@ from pathlib import Path
 from shutil import copyfile
 from typing import Dict, Optional
 
-import k2
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -35,20 +34,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
 
-from icefall.ali import (
-    convert_alignments_to_tensor,
-    load_alignments,
-    lookup_alignments,
-)
 from icefall.checkpoint import load_checkpoint
 from icefall.checkpoint import save_checkpoint as save_checkpoint_impl
 from icefall.dist import cleanup_dist, setup_dist
-from icefall.lexicon import Lexicon
 from icefall.utils import (
     AttributeDict,
-    encode_supervisions,
     setup_logger,
-    str2bool,
+    encode_supervisions,
 )
 
 #######################################################################
@@ -82,8 +74,7 @@ def get_parser():
 
     parser.add_argument(
         "--tensorboard",
-        type=str2bool,
-        default=True,
+        action='store_true',
         help="Should various information be logged in tensorboard.",
     )
 
@@ -114,43 +105,36 @@ def get_parser():
     return parser
 
 
-def get_params(lang) -> AttributeDict:
-    params = AttributeDict(
-        {
-            "graphs_dir": Path(f"data/graphs/{lang}"),
-            "exp_dir": Path(f"conformer_mmi/exp/{lang}"),
-            "best_train_loss": float("inf"),
-            "best_valid_loss": float("inf"),
-            "best_train_epoch": -1,
-            "best_valid_epoch": -1,
-            "batch_idx_train": 0,
-            "log_interval": 50,
-            "reset_interval": 200,
-            "valid_interval": 3000,
-            # parameters for conformer
-            "feature_dim": 80,
-            "subsampling_factor": 3,
-            # parameters for loss
-            "beam_size": 6,  # will change it to 8 after some batches (see code)
-            "reduction": "sum",
-            "use_double_scores": True,
-            "num_decoder_layers": 0,
-            # parameters for AdamW
-            "weight_decay": 5e-4,
-            "lr": 1e-3,
-            "den_scale": 1.0,
-        }
-    )
+def get_params(lang):
+    params = AttributeDict({
+        "graphs_dir": Path(f"data/graphs/{lang}"),
+        "exp_dir": Path(f"conformer_mmi/exp/{lang}"),
+        "best_train_loss": float("inf"),
+        "best_valid_loss": float("inf"),
+        "best_train_epoch": -1,
+        "best_valid_epoch": -1,
+        "batch_idx_train": 0,
+        "log_interval": 50,
+        "reset_interval": 200,
+        "valid_interval": 3000,
+        # parameters for conformer
+        "feature_dim": 80,
+        "subsampling_factor": 3,
+        # parameters for loss
+        "beam_size": 6,  # will change it to 8 after some batches (see code)
+        "reduction": "sum",
+        "use_double_scores": True,
+        "num_decoder_layers": 0,
+        # parameters for AdamW
+        "weight_decay": 5e-4,
+        "lr": 1e-3,
+        "den_scale": 1.0,
+    })
 
     return params
 
 
-def load_checkpoint_if_available(
-    params: AttributeDict,
-    model: nn.Module,
-    optimizer: Optional[torch.optim.Optimizer] = None,
-    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-) -> None:
+def load_checkpoint_if_available(params, model, optimizer=None, scheduler=None):
     """Load checkpoint from file.
 
     If params.start_epoch is positive, it will load the checkpoint from
@@ -197,7 +181,7 @@ def load_checkpoint_if_available(
 
 
 def save_checkpoint(
-    params: AttributeDict,
+    params,
     model: nn.Module,
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
@@ -233,9 +217,9 @@ def save_checkpoint(
 
 
 def compute_loss(
-    denfsms,
-    numfsms,
-    params: AttributeDict,
+    denfsas,
+    numfsas,
+    params,
     model: nn.Module,
     batch: dict,
     is_training: bool,
@@ -244,10 +228,10 @@ def compute_loss(
     Compute LF-MMI loss given the model and its inputs.
 
     Args:
-      denfsms:
-        Batched denominator fsm.
-      numfsms:
-        Batched numerator fsm.
+      denfsas:
+        Batched denominator fsa.
+      numfsas:
+        Batched numerator fsa.
       params:
         Parameters for training. See :func:`get_params`.
       model:
@@ -280,14 +264,11 @@ def compute_loss(
         nnet_output = model(feature)
         # nnet_output is (N, T, C)
 
-        # NOTE: We need `encode_supervisions` to sort sequences with
-        # different duration in decreasing order, required by
-        # `k2.intersect_dense` called in `LFMMILoss.forward()`
         supervision_segments, texts = encode_supervisions(
             supervisions, subsampling_factor=params.subsampling_factor
         )
 
-        loss_fn = mg.LFMMILoss(denfsms, numfsms, params.den_scale)
+        loss_fn = mg.LFMMILoss(denfsas, numfsas, params.den_scale)
 
         mmi_loss = loss_fn(nnet_output, seqlengths)
 
@@ -305,7 +286,7 @@ def compute_loss(
 
 
 def compute_validation_loss(
-    params: AttributeDict,
+    params,
     model: nn.Module,
     valid_dl: torch.utils.data.DataLoader,
     world_size: int = 1,
@@ -358,9 +339,9 @@ def compute_validation_loss(
 
 
 def train_one_epoch(
-    denfsm,
-    numfsm_paths,
-    params: AttributeDict,
+    denfsa,
+    numfsa_paths,
+    params,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     train_dl: torch.utils.data.DataLoader,
@@ -389,10 +370,10 @@ def train_one_epoch(
         Writer to write log messages to tensorboard.
       world_size:
         Number of nodes in DDP training. If it is 1, DDP is disabled.
-      denfsm:
-        Denominator fsm.
-      numfsm_paths:
-        Mapping uttid => fsm path for the numerator fsms.
+      denfsa:
+        Denominator fsa.
+      numfsa_paths:
+        Mapping uttid => fsa path for the numerator fsas.
     """
     model.train()
 
@@ -406,21 +387,21 @@ def train_one_epoch(
         params.batch_idx_train += 1
         batch_size = len(batch["supervisions"]["text"])
 
-        numfsms = []
+        numfsas = []
         for cut in batch["supervisions"]["cut"]:
             uttid = cut.supervisions[0].id.split("_sp")[0]
-            numfsms.append(mg.FSM.from_files(
-                str(numfsm_paths[uttid]),
-                str(numfsm_paths[uttid].with_suffix(".smap"))
+            numfsas.append(mg.CompiledFSA.from_files(
+                str(numfsa_paths[uttid]),
+                str(numfsa_paths[uttid].with_suffix(".smap"))
             ))
-        denfsms = mg.BatchFSM.from_list([denfsm for _ in range(len(numfsms))])
-        numfsms = mg.BatchFSM.from_list(numfsms)
+        denfsas = mg.BatchCompiledFSA.from_list([denfsa for _ in range(len(numfsas))])
+        numfsas = mg.BatchCompiledFSA.from_list(numfsas)
         if torch.cuda.is_available():
-            numfsms = numfsms.cuda()
+            numfsas = numfsas.cuda()
 
         loss, mmi_loss = compute_loss(
-            denfsms,
-            numfsms,
+            denfsas,
+            numfsas,
             params=params,
             model=model,
             batch=batch,
@@ -553,14 +534,6 @@ def run(rank, world_size, args):
     if torch.cuda.is_available():
         device = torch.device("cuda", rank)
 
-    #graph_compiler = MmiTrainingGraphCompiler(
-    #    params.lang_dir,
-    #    device=device,
-    #    oov="<UNK>",
-    #    sos_id=1,
-    #    eos_id=1,
-    #)
-
     logging.info("About to create model")
 
     with open(params.graphs_dir / "numpdf", "r") as f:
@@ -592,21 +565,21 @@ def run(rank, world_size, args):
     train_dl = soapies.train_dataloaders()
     valid_dl = soapies.valid_dataloaders()
 
-    # Load the numerator fsm mapping.
-    numfsm_paths = {}
+    # Load the numerator fsa mapping.
+    numfsa_paths = {}
     for split in ("train", "dev"):
-        with open(params["graphs_dir"] / "numfsms" / split / "fsm.scp", "r") as f:
+        with open(params["graphs_dir"] / "numfsas" / split / "fsa.scp", "r") as f:
             for line in f:
                 uttid, path = line.strip().split()
-                numfsm_paths[uttid] = Path(path)
+                numfsa_paths[uttid] = Path(path)
 
     # Load the denominator graph.
-    denfsm = mg.FSM.from_files(
-        str(params["graphs_dir"] / "denominator.fsm"),
+    denfsa = mg.CompiledFSA.from_files(
+        str(params["graphs_dir"] / "denominator.fsa"),
         str(params["graphs_dir"] / "denominator.smap"),
     )
     if torch.cuda.is_available():
-        denfsm = denfsm.cuda()
+        denfsa = denfsa.cuda()
 
     for epoch in range(params.start_epoch, params.num_epochs):
         fix_random_seed(params.seed + epoch)
@@ -625,8 +598,8 @@ def run(rank, world_size, args):
         params.cur_epoch = epoch
 
         train_one_epoch(
-            denfsm,
-            numfsm_paths,
+            denfsa,
+            numfsa_paths,
             params=params,
             model=model,
             optimizer=optimizer,

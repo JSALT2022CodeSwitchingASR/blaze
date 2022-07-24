@@ -13,17 +13,17 @@ using ProgressMeter
 using TOML
 
 
-@everywhere function statemap(fsm, numpdf)
+@everywhere function statemap(fsa, numpdf)
     sparse(
-        1:nstates(fsm)+1,
-        map(x -> x[end], [val.(fsm.λ)..., (numpdf+1,)]),
-        one(eltype(fsm.α)),
-        nstates(fsm) + 1,
+        1:nstates(fsa)+1,
+        map(x -> x[end], [val.(fsa.λ)..., (numpdf+1,)]),
+        one(eltype(fsa.α)),
+        nstates(fsa) + 1,
         numpdf + 1
     )
 end
 
-@everywhere function LinearFSM(K::Type{<:LogSemiring}, seq; silword,
+@everywhere function LinearFSA(K::Type{<:LogSemiring}, seq; silword,
                               init_silprob = 0, silprob = 0,
 				              final_silprob = 0)
 	arcs = []
@@ -63,7 +63,7 @@ end
 		final = [scount => one(K)]
 	end
 
-	FSM(init, arcs, final, labels)
+	FSA(init, arcs, final, labels)
 end
 
 function make_hmms(units, topojson)
@@ -74,7 +74,8 @@ function make_hmms(units, topojson)
 	open(units, "r") do f
         @showprogress for line in readlines(f)
 			jsondata["labels"] = collect(numpdf+1:numpdf+nstates)
-			unitdict[Label(String(strip(line)))] = FSM(json(jsondata))
+            token = split(line)[1]
+			unitdict[String(token)] = FSA(json(jsondata))
 			numpdf += nstates
 		end
 	end
@@ -82,23 +83,22 @@ function make_hmms(units, topojson)
 end
 
 function make_lexicon(K, lexicon; silword)
-	lfsm = Dict()
+	lfsa = Dict()
 
 	open(lexicon, "r") do f
         @showprogress for line in readlines(f)
 			tokens = String.(split(line))
 			word, pronun = tokens[1], tokens[2:end]
-			word = Label(word)
 
-			fsm = LinearFSM(K, pronun; silword)
-			if word in keys(lfsm)
-				lfsm[word] = union(lfsm[word], fsm) |> minimize |> renorm
+			fsa = LinearFSA(K, pronun; silword)
+			if word in keys(lfsa)
+				lfsa[word] = union(lfsa[word], fsa) |> minimize |> renorm
 			else
-				lfsm[word] = fsm
+				lfsa[word] = fsa
 			end
 		end
 	end
-	lfsm
+	lfsa
 end
 
 function make_numerator_graphs(K, folder, manifest, lexicon, hmms, numpdf;
@@ -106,7 +106,7 @@ function make_numerator_graphs(K, folder, manifest, lexicon, hmms, numpdf;
                                final_silprob, ngram_order)
 
     @everywhere workers() mkpath(joinpath($folder, "$(myid() - 1)"))
-    @everywhere workers() rm(joinpath($folder, "$(myid() - 1)", "fsm.scp"), force=true)
+    @everywhere workers() rm(joinpath($folder, "$(myid() - 1)", "fsa.scp"), force=true)
     @everywhere workers() rm(joinpath($folder, "$(myid() - 1)", "smap.scp"), force=true)
 
     fh = GZip.open(manifest)
@@ -121,18 +121,18 @@ function make_numerator_graphs(K, folder, manifest, lexicon, hmms, numpdf;
 		if isempty(seq)
 		    Dict()
 	    else
-            seq = [Label(s) in keys(lexicon) ? s : unkword for s in seq]
+            seq = [s in keys(lexicon) ? s : unkword for s in seq]
 
-            G = LinearFSM(K, seq; silword, init_silprob, silprob, final_silprob)
-            GL = G ∘ lexicon
-            GLH = GL ∘ hmms
-            fsm_path = joinpath(folder, "$(myid() - 1)", uttid * ".fsm")
-            serialize(fsm_path, GLH)
+            G = LinearFSA(K, seq; silword, init_silprob, silprob, final_silprob)
+            GL = replace(i -> lexicon[ val(G.λ[i])[end] ], G)
+            GLH = replace(i -> hmms[ val(GL.λ[i])[end] ], GL)
+            fsa_path = joinpath(folder, "$(myid() - 1)", uttid * ".fsa")
+            serialize(fsa_path, compile(GLH))
             smap_path = joinpath(folder, "$(myid() - 1)", uttid * ".smap")
             serialize(smap_path, statemap(GLH, numpdf))
 
-            open(joinpath(folder, "$(myid() - 1)", "fsm.scp"), "a") do f
-                println(f, uttid, " ", fsm_path)
+            open(joinpath(folder, "$(myid() - 1)", "fsa.scp"), "a") do f
+                println(f, uttid, " ", fsa_path)
             end
             open(joinpath(folder, "$(myid() - 1)", "smap.scp"), "a") do f
                 println(f, uttid, " ", smap_path)
@@ -167,7 +167,7 @@ lexicon = make_lexicon(K, config["data"]["lexicon"];
 
 #@info "Build the numerator graphs (train) ($(Threads.nthreads()) threads)..."
 @info "Build the numerator graphs (train) ($(nprocs() - 1) workers)..."
-outfolder = joinpath(config["supervision"]["outdir"], "numfsms", "train")
+outfolder = joinpath(config["supervision"]["outdir"], "numfsas", "train")
 mkpath(outfolder)
 ngrams = make_numerator_graphs(
     K,
@@ -184,9 +184,9 @@ ngrams = make_numerator_graphs(
     ngram_order = config["supervision"]["ngram_order"]
 )
 
-open(joinpath(outfolder, "fsm.scp"), "w") do f
+open(joinpath(outfolder, "fsa.scp"), "w") do f
     for wid in workers()
-        write(f, read(joinpath(outfolder, "$(wid - 1)", "fsm.scp")))
+        write(f, read(joinpath(outfolder, "$(wid - 1)", "fsa.scp")))
     end
 end
 
@@ -198,7 +198,7 @@ end
 
 
 @info "Build the numerator graphs (dev) ($(nprocs() - 1) workers)..."
-outfolder = joinpath(config["supervision"]["outdir"], "numfsms", "dev")
+outfolder = joinpath(config["supervision"]["outdir"], "numfsas", "dev")
 mkpath(outfolder)
 ngrams = make_numerator_graphs(
     K,
@@ -215,9 +215,9 @@ ngrams = make_numerator_graphs(
     ngram_order = config["supervision"]["ngram_order"]
 )
 
-open(joinpath(outfolder, "fsm.scp"), "w") do f
+open(joinpath(outfolder, "fsa.scp"), "w") do f
     for wid in workers()
-        write(f, read(joinpath(outfolder, "$(wid - 1)", "fsm.scp")))
+        write(f, read(joinpath(outfolder, "$(wid - 1)", "fsa.scp")))
     end
 end
 
@@ -228,9 +228,10 @@ open(joinpath(outfolder, "smap.scp"), "w") do f
 end
 
 @info "Build the denominator graph..."
-lmfsm = LanguageModelFSM(ngrams) ∘ hmms
-serialize(joinpath(config["supervision"]["outdir"], "denominator") * ".fsm",
-          lmfsm)
+L = LanguageModelFSA(ngrams)
+lmfsa = replace(i -> hmms[ val(L.λ[i])[end] ], L)
+serialize(joinpath(config["supervision"]["outdir"], "denominator") * ".fsa",
+          compile(lmfsa))
 serialize(joinpath(config["supervision"]["outdir"], "denominator") * ".smap",
-          statemap(lmfsm, numpdf))
+          statemap(lmfsa, numpdf))
 

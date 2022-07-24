@@ -88,31 +88,31 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
 
     fi
 
-    #python local/prepare_lang.py --lang-dir $langdir
+    python local/prepare_lang.py --lang-dir $langdir
 
-    if [ ! -f data/lm/$lang/G_${ngram_order}_gram.fst.txt ]; then
-        echo "converting arpa lm to fst"
-        python3 -m kaldilm \
-            --read-symbol-table="data/lang/$lang/words.txt" \
-            --disambig-symbol='#0' \
-            --max-order=$ngram_order \
-            data/lm/$lang/lm.${ngram_order}_gram.arpa > data/lm/$lang/G_${ngram_order}_gram.fst.txt
-    else
-        echo "lm fst already exists - skipping"
-    fi
+    #if [ ! -f data/lm/$lang/G_${ngram_order}_gram.fst.txt ]; then
+    #    echo "converting arpa lm to fst"
+    #    python3 -m kaldilm \
+    #        --read-symbol-table="data/lang/$lang/words.txt" \
+    #        --disambig-symbol='#0' \
+    #        --max-order=$ngram_order \
+    #        data/lm/$lang/lm.${ngram_order}_gram.arpa > data/lm/$lang/G_${ngram_order}_gram.fst.txt
+    #else
+    #    echo "lm fst already exists - skipping"
+    #fi
 fi
 
 
-if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
-
-    echo "================================================================"
-    echo " 4. Download and prepare the lexicon and the phone set"
-    echo "================================================================"
-
-    #python local/download_lexicon.py $lang $langdir
-    #python local/prepare_lang.py --lang-dir $langdir
-
-fi
+#if [ $stage -le 4 ] && [ $stop_stage -ge 4 ]; then
+#
+#    echo "================================================================"
+#    echo " 4. Download and prepare the lexicon and the phone set"
+#    echo "================================================================"
+#
+#    #python local/download_lexicon.py $lang $langdir
+#    #python local/prepare_lang.py --lang-dir $langdir
+#
+#fi
 
 
 
@@ -137,15 +137,15 @@ EOF
 
     cat > $graphsdir/graph_config.toml << EOF
 [data]
-units = "$langdir/units"
-lexicon = "$langdir/lexicon"
+units = "$langdir/tokens.txt"
+lexicon = "$langdir/lexicon.txt"
 train_manifest = "$manifestsdir/soapies-${lang}_supervisions_train.jsonl.gz"
 dev_manifest = "$manifestsdir/soapies-${lang}_supervisions_dev.jsonl.gz"
 
 [supervision]
 outdir = "$graphsdir"
-silword = "<sil>"
-unkword = "<unk>"
+silword = "<SIL>"
+unkword = "<UNK>"
 initial_silprob = 0.8
 silprob = 0.2
 final_silprob = 0.8
