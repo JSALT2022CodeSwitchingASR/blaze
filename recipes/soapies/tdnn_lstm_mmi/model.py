@@ -108,3 +108,4 @@ class TdnnLstm(nn.Module):
         x = self.linear(x)
         x = nn.functional.log_softmax(x, dim=-1)
         return x
+

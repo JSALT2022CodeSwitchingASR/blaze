@@ -9,6 +9,8 @@ njobs=$(nproc)
 ngram_order=3
 stage=1
 stop_stage=100
+unk_sym='<UNK>'
+sil_sym='<SIL>'
 
 . shared/parse_options.sh
 
@@ -59,6 +61,7 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
         echo "estimating ${ngram_order}-gram language model"
         mkdir -p data/lm/$lang
         ngram-count \
+            -vocab data/lang/$lang/words.txt \
             -order $ngram_order \
             -kn-modify-counts-at-end \
             -ukndiscount \
@@ -66,6 +69,7 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
             -gt2min 0 \
             -gt3min 0 \
             -text data/texts/$lang/text_train_corpus.txt \
+            -unk -map-unk "$unk_sym" \
             -lm data/lm/$lang/lm.${ngram_order}_gram.arpa
     else
         echo "${ngram_order}-gram language model already estimated"
@@ -78,8 +82,8 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
             ${shortnames[$lang]} \
             data/lang/$lang/rawlexicon.txt
 
-        echo -e "<SIL>\t<SIL>" > data/lang/$lang/lexicon.txt
-        echo -e "<UNK>\t<UNK>" >> data/lang/$lang/lexicon.txt
+        echo -e "$sil_sym\t$sil_sym" > data/lang/$lang/lexicon.txt
+        echo -e "$unk_sym\t$unk_sym" >> data/lang/$lang/lexicon.txt
         awk -F'\t' '{print toupper($1)"\t"$2}' \
             data/lang/$lang/rawlexicon.txt \
             >> data/lang/$lang/lexicon.txt
@@ -144,8 +148,8 @@ dev_manifest = "$manifestsdir/soapies-${lang}_supervisions_dev.jsonl.gz"
 
 [supervision]
 outdir = "$graphsdir"
-silword = "<SIL>"
-unkword = "<UNK>"
+silword = "$sil_sym"
+unkword = "$unk_sym"
 initial_silprob = 0.8
 silprob = 0.2
 final_silprob = 0.8
