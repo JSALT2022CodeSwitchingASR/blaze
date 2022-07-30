@@ -88,7 +88,7 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
             data/lang/$lang/rawlexicon.txt \
             >> data/lang/$lang/lexicon.txt
 
-    rm data/lang/$lang/rawlexicon.txt
+        rm data/lang/$lang/rawlexicon.txt
 
     fi
 

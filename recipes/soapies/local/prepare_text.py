@@ -90,7 +90,9 @@ def prepare_text(lang):
                     add_line(words, line)
                     print(line, file=f)
 
-    with open(output_dir / "words.txt", "w") as f:
+    langdir = Path("data") / "lang" / lang
+    langdir.mkdir(parents=True, exist_ok=True)
+    with open(langdir / "words.txt", "w") as f:
         for word in sorted(words):
             if word == "<UNK>":
                 continue
